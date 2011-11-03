@@ -1,64 +1,103 @@
 package net.symphonious.longpoll;
 
 import com.lmax.disruptor.*;
+import com.lmax.disruptor.dsl.Disruptor;
 
+import javax.servlet.AsyncContext;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.logging.Logger;
 
-public class NotificationChannel<V>
+public class NotificationChannel<T extends SequencedEvent>
 {
-    private ExecutorService executor;
-    private RingBuffer<V> notifications;
-    private final BatchEventProcessor<V> eventProcessor;
-    private NotificationManager<V> notificationManager;
-    private V fullUpdateMessage;
-    private long maximumUpdatesToSend;
+    private static final Logger LOGGER = Logger.getLogger(NotificationChannel.class.getName());
 
-    public NotificationChannel(final NotificationManager<V> notificationManager, final int maxNotificationBufferSize, final long maximumUpdatesToSend)
+    private ExecutorService executor;
+    private RingBuffer<EventHolder<T>> notifications;
+    private long maximumUpdatesToSend;
+    private final SequenceBarrier notificationReadyBarrier;
+    private final Disruptor<EventHolder<T>> disruptor;
+    private final FullUpdateBuilder<T> fullUpdateBuilder;
+
+    public NotificationChannel(final FullUpdateBuilder<T> fullUpdateBuilder,
+                               final int maxNotificationBufferSize, final long maximumUpdatesToSend)
     {
-        if (maximumUpdatesToSend >= maxNotificationBufferSize)
-        {
-            throw new IllegalArgumentException("maximumUpdatesToSend must be smaller than maxNotificationsBufferSize.");
-        }
-        this.notificationManager = notificationManager;
+        validateSizes(maxNotificationBufferSize, maximumUpdatesToSend);
+        this.fullUpdateBuilder = fullUpdateBuilder;
         this.maximumUpdatesToSend = maximumUpdatesToSend;
 
         executor = Executors.newCachedThreadPool();
 
-        fullUpdateMessage = notificationManager.newInstance();
-
-        notifications = new RingBuffer<V>(notificationManager, maxNotificationBufferSize, ClaimStrategy.Option.MULTI_THREADED, WaitStrategy.Option.BLOCKING);
-        eventProcessor = new BatchEventProcessor<V>(notifications, notifications.newBarrier(), new FullUpdateBuilder());
-        executor.submit(eventProcessor);
-        notifications.setGatingSequences(eventProcessor.getSequence());
+        disruptor = new Disruptor<EventHolder<T>>(EventHolder.<T>getFactory(), maxNotificationBufferSize, executor, ClaimStrategy.Option.MULTI_THREADED,
+                                                        WaitStrategy.Option.BLOCKING);
+        final EventHolderUnwrapper<T> fullUpdateBuilderProcessorThingy = new EventHolderUnwrapper<T>(fullUpdateBuilder);
+        disruptor.handleEventsWith(fullUpdateBuilderProcessorThingy);
+        disruptor.start();
+        notifications = disruptor.getRingBuffer();
+        notificationReadyBarrier = notifications.newBarrier();
     }
 
-    public V getNotificationToSend(long lastSequenceReceived)
+    public Collection<T> getNotificationsToSend(final long lastSequenceReceived)
+    {
+        return getNotificationsToSend(lastSequenceReceived, new ArrayList<T>());
+    }
+
+    public Collection<T> getNotificationsToSend(final long lastSequenceReceived, final Collection<T> notificationsToSend)
     {
         final long cursor = notifications.getCursor();
         if (needsFullUpdate(cursor, lastSequenceReceived))
         {
-            return fullUpdateMessage;
+            notificationsToSend.add(fullUpdateBuilder.getFullUpdate());
         }
         else if (cursor > lastSequenceReceived)
         {
-            V messageToSend = null;
             for (long i = Math.max(lastSequenceReceived, 0); i <= cursor; i++)
             {
-                final V notificationMessage = notifications.get(i);
-                if (messageToSend == null)
-                {
-                    messageToSend = notificationMessage;
-                }
-                else
-                {
-                    notificationManager.combine(messageToSend, notificationMessage);
-                }
+                notificationsToSend.add(notifications.get(i).getEvent());
             }
-            return messageToSend;
         }
-        return null;
+        return notificationsToSend;
+    }
+
+    public void publish(final T value)
+    {
+        final long sequence = notifications.next();
+        notifications.get(sequence).setEvent(value);
+        value.setSequence(sequence);
+        notifications.publish(sequence);
+    }
+
+    public void shutdown(final long timeout, final TimeUnit timeUnit) throws InterruptedException
+    {
+        disruptor.halt();
+        executor.shutdown();
+        executor.awaitTermination(timeout, timeUnit);
+    }
+
+    public void dispatchOnNextNotification(final long lastSequenceReceived, final AsyncContext asyncContext)
+    {
+        asyncContext.start(new Runnable()
+        {
+            public void run()
+            {
+                try
+                {
+                    notificationReadyBarrier.waitFor(lastSequenceReceived + 1);
+                }
+                catch (AlertException e)
+                {
+                    LOGGER.info("Received alert while waiting for next notification.");
+                }
+                catch (InterruptedException e)
+                {
+                    LOGGER.info("Interrupted while waiting for next notification.");
+                }
+                asyncContext.dispatch();
+            }
+        });
     }
 
     private boolean needsFullUpdate(final long cursor, final long lastSequenceReceived)
@@ -66,30 +105,11 @@ public class NotificationChannel<V>
         return cursor >= 0 && lastSequenceReceived + maximumUpdatesToSend < cursor;
     }
 
-    public void publish(final V value)
+    private void validateSizes(final int maxNotificationBufferSize, final long maximumUpdatesToSend)
     {
-        final long sequence = notifications.next();
-        notificationManager.set(notifications.get(sequence), value);
-        notifications.publish(sequence);
-    }
-
-    public void shutdown(final long timeout, final TimeUnit timeUnit) throws InterruptedException
-    {
-        eventProcessor.halt();
-        executor.shutdown();
-        executor.awaitTermination(timeout, timeUnit);
-    }
-
-    public void waitForSequenceToReach(final long sequenceNumber) throws AlertException, InterruptedException
-    {
-        notifications.newBarrier(eventProcessor.getSequence()).waitFor(sequenceNumber);
-    }
-
-    private class FullUpdateBuilder implements EventHandler<V>
-    {
-        public void onEvent(final V message, final long sequence, final boolean endOfBatch) throws Exception
+        if (maximumUpdatesToSend >= maxNotificationBufferSize)
         {
-            notificationManager.combine(fullUpdateMessage, message);
+            throw new IllegalArgumentException("maximumUpdatesToSend must be smaller than maxNotificationsBufferSize.");
         }
     }
 }
