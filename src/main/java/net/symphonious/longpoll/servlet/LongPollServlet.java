@@ -30,6 +30,7 @@ public abstract class LongPollServlet<T extends SequencedEvent> extends HttpServ
         notificationChannel = new NotificationChannel<T>(getFullUpdateBuilder(), maximumNotificationBufferSize, maximumUpdatesToSend);
     }
 
+    @SuppressWarnings("unused")
     protected NotificationChannel<T> getNotificationChannel()
     {
         return notificationChannel;
