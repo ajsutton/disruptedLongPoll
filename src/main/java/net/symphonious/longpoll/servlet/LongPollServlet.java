@@ -13,7 +13,7 @@ import java.util.Collection;
 
 public abstract class LongPollServlet<T extends SequencedEvent> extends HttpServlet
 {
-    public static final String SEQUENCE_PARAM_NAME = "sequence";
+    public static final String SEQUENCE_PARAM_NAME = "lastSequence";
     private final int maximumNotificationBufferSize;
     private final long maximumUpdatesToSend;
     private NotificationChannel<T> notificationChannel;
@@ -30,6 +30,11 @@ public abstract class LongPollServlet<T extends SequencedEvent> extends HttpServ
         notificationChannel = new NotificationChannel<T>(getFullUpdateBuilder(), maximumNotificationBufferSize, maximumUpdatesToSend);
     }
 
+    protected NotificationChannel<T> getNotificationChannel()
+    {
+        return notificationChannel;
+    }
+
     @Override
     protected void doGet(final HttpServletRequest request, final HttpServletResponse response) throws ServletException, IOException
     {
@@ -37,7 +42,7 @@ public abstract class LongPollServlet<T extends SequencedEvent> extends HttpServ
         final Collection<T> notificationsToSend = notificationChannel.getNotificationsToSend(lastReceivedSequence);
         if (notificationsToSend.size() > 0)
         {
-            sendNotifications(notificationsToSend);
+            sendNotifications(notificationsToSend, request, response);
         }
         else
         {
@@ -50,7 +55,8 @@ public abstract class LongPollServlet<T extends SequencedEvent> extends HttpServ
         return Long.parseLong(request.getParameter(SEQUENCE_PARAM_NAME));
     }
 
-    protected abstract void sendNotifications(final Collection<T> notificationsToSend);
+    protected abstract void sendNotifications(final Collection<T> notificationsToSend, HttpServletRequest request, HttpServletResponse response)
+    throws ServletException, IOException;
 
     protected abstract FullUpdateBuilder<T> getFullUpdateBuilder();
 }
