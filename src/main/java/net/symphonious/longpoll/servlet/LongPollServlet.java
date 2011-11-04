@@ -11,6 +11,8 @@ import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.util.Collection;
 
+import static java.util.concurrent.TimeUnit.SECONDS;
+
 public abstract class LongPollServlet<T extends SequencedEvent> extends HttpServlet
 {
     public static final String SEQUENCE_PARAM_NAME = "lastSequence";
@@ -28,6 +30,20 @@ public abstract class LongPollServlet<T extends SequencedEvent> extends HttpServ
     public void init() throws ServletException
     {
         notificationChannel = new NotificationChannel<T>(getFullUpdateBuilder(), maximumNotificationBufferSize, maximumUpdatesToSend);
+    }
+
+    @Override
+    public void destroy()
+    {
+        try
+        {
+            notificationChannel.shutdown(10, SECONDS);
+        }
+        catch (InterruptedException e)
+        {
+            // Ignore.
+        }
+        super.destroy();
     }
 
     @SuppressWarnings("unused")
