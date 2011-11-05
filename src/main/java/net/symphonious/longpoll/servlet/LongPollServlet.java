@@ -41,6 +41,7 @@ public abstract class LongPollServlet<T extends SequencedNotification> extends H
      * @param maximumUpdatesToSend the maximum number of notifications to send to client. Clients which fall further behind
      * than this limit will be sent a full update instead.
      */
+    @SuppressWarnings({"UnusedDeclaration"})
     public LongPollServlet(final int maximumNotificationBufferSize, final long maximumUpdatesToSend)
     {
         this(maximumNotificationBufferSize, maximumUpdatesToSend, "lastSequence");
