@@ -1,6 +1,6 @@
 package net.symphonious.longpoll;
 
-public class TestValue extends AbstractSequencedEvent
+public class TestValue extends AbstractSequencedNotification
 {
     private StringBuffer value;
 
