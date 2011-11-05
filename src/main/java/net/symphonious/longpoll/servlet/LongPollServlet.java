@@ -9,6 +9,7 @@ import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Collection;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -28,11 +29,13 @@ import static java.util.concurrent.TimeUnit.SECONDS;
  */
 public abstract class LongPollServlet<T extends SequencedNotification> extends HttpServlet
 {
+    private ThreadLocal<Collection<T>> notificationsToSend = new ThreadLocal<Collection<T>>();
+
+    private NotificationChannel<T> notificationChannel;
+
     private  final String sequenceParamName;
     private final int maximumNotificationBufferSize;
     private final long maximumUpdatesToSend;
-    private NotificationChannel<T> notificationChannel;
-
 
     /**
      * Create the servlet with specified configuration parameters.
@@ -108,7 +111,7 @@ public abstract class LongPollServlet<T extends SequencedNotification> extends H
     private void sendNotifications(final HttpServletRequest request, final HttpServletResponse response) throws ServletException, IOException
     {
         final long lastReceivedSequence = getLastReceivedSequence(request);
-        final Collection<T> notificationsToSend = notificationChannel.getNotificationsToSend(lastReceivedSequence);
+        final Collection<T> notificationsToSend = notificationChannel.getNotificationsToSend(lastReceivedSequence, getNotificationsToSendCollection());
         if (notificationsToSend.size() > 0)
         {
             sendNotifications(request, response, notificationsToSend);
@@ -117,6 +120,21 @@ public abstract class LongPollServlet<T extends SequencedNotification> extends H
         {
             notificationChannel.dispatchOnNextNotification(lastReceivedSequence, request.startAsync());
         }
+    }
+
+    private Collection<T> getNotificationsToSendCollection()
+    {
+        Collection<T> collection = notificationsToSend.get();
+        if (collection == null)
+        {
+            collection = new ArrayList<T>();
+            notificationsToSend.set(collection);
+        }
+        else
+        {
+            collection.clear();
+        }
+        return collection;
     }
 
     /**
